@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="ar">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>أسعار الذهب</title>
+
+<link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;700&display=swap" rel="stylesheet">
+
+<style>
+body {
+    font-family: 'Cairo', sans-serif;
+    background: linear-gradient(135deg, #111827, #1f2937);
+    margin: 0;
+    padding: 20px;
+    color: white;
+}
+
+h1 {
+    text-align: center;
+    color: gold;
+}
+
+.section-title {
+    margin-top: 25px;
+    color: #fbbf24;
+    border-bottom: 2px solid #fbbf24;
+}
+
+.container {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+    gap: 15px;
+}
+
+.card {
+    background: #1f2937;
+    padding: 20px;
+    border-radius: 12px;
+}
+
+.card-title {
+    color: #facc15;
+    margin-bottom: 10px;
+}
+
+.sell { color: #22c55e; }
+.buy { color: #ef4444; }
+</style>
+</head>
+
+<body>
+
+<h1>💰 أسعار الذهب لحظيًا</h1>
+
+<div class="section-title">الذهب</div>
+<div class="container" id="gold"></div>
+
+<div class="section-title">العملات</div>
+<div class="container" id="currency"></div>
+
+<script>
+async function load() {
+    const res = await fetch("/api/prices");
+    const data = await res.json();
+
+    const gold = document.getElementById("gold");
+    const currency = document.getElementById("currency");
+
+    gold.innerHTML = "";
+    currency.innerHTML = "";
+
+    for (let [k, v] of Object.entries(data)) {
+        let card = document.createElement("div");
+        card.className = "card";
+
+        if (typeof v === "object") {
+            card.innerHTML = `
+                <div class="card-title">${k}</div>
+                <div class="sell">بيع: ${v.بيع}</div>
+                <div class="buy">شراء: ${v.شراء}</div>
+            `;
+            gold.appendChild(card);
+        } else {
+            card.innerHTML = `
+                <div class="card-title">${k}</div>
+                <div>${v}</div>
+            `;
+            currency.appendChild(card);
+        }
+    }
+}
+
+load();
+setInterval(load, 60000);
+</script>
+
+</body>
+</html>
