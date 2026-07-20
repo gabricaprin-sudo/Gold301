@@ -54,6 +54,7 @@ egypt_tz = pytz.timezone("Africa/Cairo")
 # =====================
 last_hash = None
 last_data = None
+last_gold_hash = None  # Track only gold price changes
 sent_close_msg = False
 sent_open_msg = False
 fail_count = 0
@@ -138,13 +139,27 @@ def record_alert(karat):
     global last_alert_time
     last_alert_time[karat] = datetime.now(egypt_tz)
 
+def is_gold_karat(k):
+    """Check if key is a gold karat (not currency/ounce)"""
+    return "عيار" in k
+
+def get_gold_hash(data):
+    """Get hash of only gold karat prices"""
+    gold_data = {k: v for k, v in data.items() if isinstance(v, dict) and is_gold_karat(k)}
+    if not gold_data:
+        return None
+    return hashlib.md5(str(dict(sorted(gold_data.items()))).encode()).hexdigest()
+
 def check_alerts(data, previous_data):
     alerts = []
     if not previous_data:
         return alerts
 
+    # Only check gold karats, ignore currency/ounce
     for k, v in data.items():
         if not isinstance(v, dict):
+            continue
+        if not is_gold_karat(k):
             continue
         if k not in previous_data or not isinstance(previous_data[k], dict):
             continue
@@ -383,7 +398,10 @@ def loop():
                     time.sleep(10)
                     continue
 
-                if page_hash != last_hash:
+                # Check if gold prices changed (not currency/ounce)
+                current_gold_hash = get_gold_hash(data)
+
+                if current_gold_hash and current_gold_hash != last_gold_hash:
                     # ====== SMART ALERTS ======
                     alerts = check_alerts(data, last_data)
                     for alert_msg in alerts:
@@ -391,8 +409,11 @@ def loop():
                         time.sleep(1)
                     # ==========================
                     send(format_msg(data))
-                    last_hash = page_hash
-                    last_data = data
+                    last_gold_hash = current_gold_hash
+
+                # Always update full data and hash
+                last_hash = page_hash
+                last_data = data
 
                 time.sleep(10)
 
