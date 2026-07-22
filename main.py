@@ -167,26 +167,26 @@ def get_snapshot(retries=3):
                 time.sleep(3)
                 continue
 
-  # نحسب الـ Hash من أسعار الذهب فقط (بدون الدولار والأوقية ودولار الصاغة)
-gold_only = {}
+              # نحسب الـ Hash من أسعار الذهب فقط
+            gold_only = {}
 
-for key, value in data.items():
-    if isinstance(value, dict):
-        gold_only[key] = {
-            "buy": value["buy"],
-            "sell": value["sell"]
-        }
+            for key, value in data.items():
+                if isinstance(value, dict):
+                    gold_only[key] = {
+                        "buy": value["buy"],
+                        "sell": value["sell"]
+                    }
 
-page_hash = hashlib.md5(
-    json.dumps(
-        gold_only,
-        sort_keys=True,
-        ensure_ascii=False
-    ).encode("utf-8")
-).hexdigest()
+            page_hash = hashlib.md5(
+                json.dumps(
+                    gold_only,
+                    sort_keys=True,
+                    ensure_ascii=False
+                ).encode("utf-8")
+            ).hexdigest()
 
-fail_count = 0
-return data, page_hash
+            fail_count = 0
+            return data, page_hash
 
         except Exception as e:
             fail_count += 1
