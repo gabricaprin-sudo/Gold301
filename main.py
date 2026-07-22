@@ -151,9 +151,11 @@ def get_gold_hash(data):
     return hashlib.md5(str(dict(sorted(gold_data.items()))).encode()).hexdigest()
 
 def check_alerts(data, previous_data):
-    alerts = []
+    """Returns alert header text to prepend to message, or empty string"""
     if not previous_data:
-        return alerts
+        return ""
+
+    alert_lines = []
 
     # Only check gold karats, ignore currency/ounce
     for k, v in data.items():
@@ -170,23 +172,24 @@ def check_alerts(data, previous_data):
         change = pct_change(current_sell, previous_sell)
         if change is not None and abs(change) >= ALERT_PCT_THRESHOLD:
             if can_send_alert(k):
-                direction = "⬆️ ارتفاع" if change > 0 else "⬇️ انخفاض"
+                direction = "⬆️" if change > 0 else "⬇️"
                 emoji = "🚀" if change > 0 else "📉"
-                msg = emoji + " <b>تنبيه!</b>\n\n🔸 <b>" + k + "</b>\n" + direction + ": <b>" + str(round(change, 2)) + "%</b>\n💰 السعر: " + str(current_sell) + "\n📊 السابق: " + str(previous_sell) + "\n⏰ " + datetime.now(egypt_tz).strftime("%I:%M %p")
-                alerts.append(msg)
+                alert_lines.append(emoji + " <b>" + k + "</b> " + direction + " " + str(round(abs(change), 2)) + "%")
                 record_alert(k)
                 continue
 
         diff = float(current_sell - previous_sell)
         if abs(diff) >= ALERT_VALUE_THRESHOLD:
             if can_send_alert(k):
-                direction = "⬆️ ارتفاع" if diff > 0 else "⬇️ انخفاض"
+                direction = "⬆️" if diff > 0 else "⬇️"
                 emoji = "💹" if diff > 0 else "🔻"
-                msg = emoji + " <b>تنبيه!</b>\n\n🔸 <b>" + k + "</b>\n" + direction + ": <b>" + str(round(diff, 2)) + " جنيه</b>\n💰 السعر: " + str(current_sell) + "\n📊 السابق: " + str(previous_sell) + "\n⏰ " + datetime.now(egypt_tz).strftime("%I:%M %p")
-                alerts.append(msg)
+                alert_lines.append(emoji + " <b>" + k + "</b> " + direction + " " + str(round(abs(diff), 2)) + " جنيه")
                 record_alert(k)
 
-    return alerts
+    if alert_lines:
+        header = "⚡ <b>تنبيه تغير سعر!</b>" + "\n\n" + "\n".join(alert_lines) + "\n\n"
+        return header
+    return ""
 
 # =====================
 # SNAPSHOT
@@ -303,8 +306,8 @@ def send(msg, retries=3):
 # =====================
 # FORMAT
 # =====================
-def format_msg(data):
-    msg = "💎 <b>تحديث لحظي للذهب</b>\n\n━━━━━━━━━━━━━━\n"
+def format_msg(data, alert_header=""):
+    msg = alert_header + "💎 <b>تحديث لحظي للذهب</b>\n\n━━━━━━━━━━━━━━\n"
 
     for k, v in data.items():
         if isinstance(v, dict):
@@ -402,13 +405,10 @@ def loop():
                 current_gold_hash = get_gold_hash(data)
 
                 if current_gold_hash and current_gold_hash != last_gold_hash:
-                    # ====== SMART ALERTS ======
-                    alerts = check_alerts(data, last_data)
-                    for alert_msg in alerts:
-                        send(alert_msg)
-                        time.sleep(1)
-                    # ==========================
-                    send(format_msg(data))
+                    # ====== SMART ALERTS (merged into one message) ======
+                    alert_header = check_alerts(data, last_data)
+                    msg = format_msg(data, alert_header)
+                    send(msg)
                     last_gold_hash = current_gold_hash
 
                 # Always update full data and hash
