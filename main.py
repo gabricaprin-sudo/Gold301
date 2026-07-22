@@ -23,16 +23,9 @@ app = Flask(__name__)
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "8165343576:AAHjfPZpUUUDvWk3WbC1XocQ_MGQ1aESLT0")
 CHANNEL = os.getenv("TELEGRAM_CHANNEL", "@AndriaGold")
 URL = os.getenv("GOLD_URL", "https://edahabapp.com/")
-API_KEY = os.getenv("API_KEY", "default_key_change_me")
+API_KEY = os.getenv("API_KEY")
 
 getcontext().prec = 28
-
-# =====================
-# SMART ALERTS CONFIG
-# =====================
-ALERT_PCT_THRESHOLD = float(os.getenv("ALERT_PCT_THRESHOLD", "0.5"))
-ALERT_VALUE_THRESHOLD = float(os.getenv("ALERT_VALUE_THRESHOLD", "5.0"))
-ALERT_COOLDOWN_MINUTES = int(os.getenv("ALERT_COOLDOWN", "5"))
 
 # =====================
 # LOGGING
@@ -54,7 +47,6 @@ egypt_tz = pytz.timezone("Africa/Cairo")
 # =====================
 last_hash = None
 last_data = None
-last_gold_hash = None  # Track only gold price changes
 sent_close_msg = False
 sent_open_msg = False
 fail_count = 0
@@ -67,11 +59,6 @@ daily_high = {}
 daily_low = {}
 daily_sums = {}
 yesterday_close = {}
-
-# =====================
-# SMART ALERTS STATE
-# =====================
-last_alert_time = {}
 
 # =====================
 # CLEAN DECIMAL
@@ -123,73 +110,6 @@ def pct_change(current, previous):
     if previous is None or previous == 0:
         return None
     return ((current - previous) / previous) * 100
-
-# =====================
-# SMART ALERTS
-# =====================
-def can_send_alert(karat):
-    global last_alert_time
-    now = datetime.now(egypt_tz)
-    if karat not in last_alert_time:
-        return True
-    cooldown = timedelta(minutes=ALERT_COOLDOWN_MINUTES)
-    return now - last_alert_time[karat] >= cooldown
-
-def record_alert(karat):
-    global last_alert_time
-    last_alert_time[karat] = datetime.now(egypt_tz)
-
-def is_gold_karat(k):
-    """Check if key is a gold karat (not currency/ounce)"""
-    return "عيار" in k
-
-def get_gold_hash(data):
-    """Get hash of only gold karat prices"""
-    gold_data = {k: v for k, v in data.items() if isinstance(v, dict) and is_gold_karat(k)}
-    if not gold_data:
-        return None
-    return hashlib.md5(str(dict(sorted(gold_data.items()))).encode()).hexdigest()
-
-def check_alerts(data, previous_data):
-    """Returns alert header text to prepend to message, or empty string"""
-    if not previous_data:
-        return ""
-
-    alert_lines = []
-
-    # Only check gold karats, ignore currency/ounce
-    for k, v in data.items():
-        if not isinstance(v, dict):
-            continue
-        if not is_gold_karat(k):
-            continue
-        if k not in previous_data or not isinstance(previous_data[k], dict):
-            continue
-
-        current_sell = D(v["sell"])
-        previous_sell = D(previous_data[k]["sell"])
-
-        change = pct_change(current_sell, previous_sell)
-        if change is not None and abs(change) >= ALERT_PCT_THRESHOLD:
-            if can_send_alert(k):
-                direction = "⬆️" if change > 0 else "⬇️"
-                emoji = "🚀" if change > 0 else "📉"
-                alert_lines.append(emoji + " <b>" + k + "</b> " + direction + " " + str(round(abs(change), 2)) + "%")
-                record_alert(k)
-                continue
-
-        diff = float(current_sell - previous_sell)
-        if abs(diff) >= ALERT_VALUE_THRESHOLD:
-            if can_send_alert(k):
-                direction = "⬆️" if diff > 0 else "⬇️"
-                emoji = "💹" if diff > 0 else "🔻"
-                alert_lines.append(emoji + " <b>" + k + "</b> " + direction + " " + str(round(abs(diff), 2)) + " جنيه")
-                record_alert(k)
-
-    if alert_lines:
-        header = "⚡ <b>تنبيه تغير سعر!</b>" + "\n\n" + "\n".join(alert_lines) + "\n\n"
-        return header
-    return ""
 
 # =====================
 # SNAPSHOT
@@ -306,13 +226,18 @@ def send(msg, retries=3):
 # =====================
 # FORMAT
 # =====================
-def format_msg(data, alert_header=""):
-    msg = alert_header + "💎 <b>تحديث لحظي للذهب</b>\n\n━━━━━━━━━━━━━━\n"
+def format_msg(data):
+    msg = "💎 <b>تحديث لحظي للذهب</b>\n\n━━━━━━━━━━━━━━\n"
 
+    # أولاً: عيارات الدهب (اللي بنراقبها للتغيير)
     for k, v in data.items():
-        if isinstance(v, dict):
+        if isinstance(v, dict) and "عيار" in k:
             msg += f"🔸 <b>{k}</b>\n🟢 بيع: {v['sell']} | 🔴 شراء: {v['buy']}\n──────────────\n"
-        else:
+
+    # بعدين: باقي البيانات (ثابتة، مش بتتحسب كتغيير)
+    msg += "━━━━━━━━━━━━━━\n"
+    for k, v in data.items():
+        if not isinstance(v, dict) or "عيار" not in k:
             msg += f"📌 {k}: <b>{v}</b>\n"
 
     return msg + "━━━━━━━━━━━━━━\n"
@@ -401,19 +326,22 @@ def loop():
                     time.sleep(10)
                     continue
 
-                # Check if gold prices changed (not currency/ounce)
-                current_gold_hash = get_gold_hash(data)
+                # === التعديل الرئيسي هنا ===
+                # نحسب الـ hash بس على عيارات الدهب (اللي بنراقبها للتغيير)
+                gold_only = {k: v for k, v in data.items() if isinstance(v, dict) and "عيار" in k}
+                gold_hash = hashlib.md5(str(dict(sorted(gold_only.items()))).encode()).hexdigest()
 
-                if current_gold_hash and current_gold_hash != last_gold_hash:
-                    # ====== SMART ALERTS (merged into one message) ======
-                    alert_header = check_alerts(data, last_data)
-                    msg = format_msg(data, alert_header)
-                    send(msg)
-                    last_gold_hash = current_gold_hash
+                # نحسب نفس الشيء للـ last_data لو موجود
+                last_gold = {}
+                if last_data:
+                    last_gold = {k: v for k, v in last_data.items() if isinstance(v, dict) and "عيار" in k}
+                last_gold_hash = hashlib.md5(str(dict(sorted(last_gold.items()))).encode()).hexdigest()
 
-                # Always update full data and hash
-                last_hash = page_hash
-                last_data = data
+                # نبعت رسالة بس لو عيارات الدهب اتغيرت
+                if gold_hash != last_gold_hash:
+                    send(format_msg(data))
+                    last_hash = page_hash
+                    last_data = data
 
                 time.sleep(10)
 
@@ -463,12 +391,6 @@ def health():
 @app.route("/")
 def home():
     return "💎 Live Gold System Running Secure"
-
-# =====================
-# VALIDATION WARNINGS
-# =====================
-if API_KEY == "default_key_change_me":
-    log.warning("WARNING: Using default API_KEY. Change it for production!")
 
 # =====================
 # START
