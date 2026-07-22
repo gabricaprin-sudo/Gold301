@@ -167,7 +167,7 @@ def get_snapshot(retries=3):
                 time.sleep(3)
                 continue
 
-              # نحسب الـ Hash من أسعار الذهب فقط
+            # نحسب الـ Hash من أسعار الذهب فقط
             gold_only = {}
 
             for key, value in data.items():
