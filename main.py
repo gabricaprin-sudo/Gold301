@@ -22,7 +22,8 @@ app = Flask(__name__)
 # =====================
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "8165343576:AAHjfPZpUUUDvWk3WbC1XocQ_MGQ1aESLT0")
 CHANNEL = os.getenv("TELEGRAM_CHANNEL", "@AndriaGold")
-URL = os.getenv("GOLD_URL", "https://edahabapp.com/")
+PRIMARY_URL = os.getenv("PRIMARY_URL", "https://edahabapp.com/prices-dashboard")
+FALLBACK_URL = os.getenv("FALLBACK_URL", "https://edahabapp.com/")
 API_KEY = os.getenv("API_KEY")
 
 getcontext().prec = 28
@@ -51,6 +52,7 @@ sent_close_msg = False
 sent_open_msg = False
 fail_count = 0
 MAX_FAILS = 5
+using_fallback = False  # <-- جديد: هل شغالين على الاحتياطي؟
 
 # =====================
 # DAILY STATS
@@ -112,11 +114,100 @@ def pct_change(current, previous):
     return ((current - previous) / previous) * 100
 
 # =====================
-# SNAPSHOT
+# SNAPSHOT - PRIMARY (prices-dashboard)
 # =====================
-def get_snapshot(retries=3):
-    global fail_count
+def get_snapshot_primary(retries=2):
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9,ar;q=0.8",
+        "Referer": "https://edahabapp.com/",
+    }
 
+    for attempt in range(retries):
+        try:
+            time.sleep(1 + random.randint(0, 2))
+            
+            resp = requests.get(PRIMARY_URL, headers=headers, timeout=8)
+            html = resp.text
+            soup = BeautifulSoup(html, "html.parser")
+
+            data = {}
+            gram_24 = None
+            ounce = None
+
+            # --- الطريقة 1: divs بـ class price-item (نفس طريقة الاحتياطي) ---
+            items = soup.find_all("div", class_="price-item")
+            
+            if not items:
+                # --- الطريقة 2: جدول أو cards ---
+                items = soup.find_all(["tr", "div"], class_=lambda x: x and ("price" in x.lower() or "gold" in x.lower() if x else False))
+
+            for item in items:
+                # نجرب نلاقي العنوان
+                title = item.find(["span", "h3", "h4", "div", "td"], class_=lambda x: x and ("title" in x.lower() or "name" in x.lower() or "font-medium" in x if x else False))
+                if not title:
+                    title = item.find(["span", "h3", "h4", "div", "td"])
+                
+                # نجرب نلاقي الأرقام
+                nums = item.find_all(["span", "td", "div"], class_=lambda x: x and ("number" in x.lower() or "price" in x.lower() or "value" in x.lower() if x else False))
+                if len(nums) < 2:
+                    nums = item.find_all(["span", "td", "div"])
+
+                if not title or len(nums) < 2:
+                    continue
+
+                name = title.text.strip()
+                text_nums = [n.text.strip() for n in nums if any(c.isdigit() for c in n.text)]
+
+                if len(text_nums) < 2:
+                    continue
+
+                try:
+                    sell = D(text_nums[0])
+                    buy = D(text_nums[1])
+                except:
+                    continue
+
+                if "عيار" in name:
+                    data[name] = {"buy": str(buy), "sell": str(sell)}
+                    if "24" in name:
+                        gram_24 = sell
+
+                if "أوقية" in name or "ounce" in name.lower():
+                    ounce = sell
+                    data["الأوقية العالمية"] = str(ounce)
+
+                if "USD" in name or "الدولار" in name:
+                    data["الدولار الأمريكي"] = str(sell)
+
+            # نحسب دولار الصاغة
+            if gram_24 and ounce:
+                gold_dollar = (gram_24 * Decimal("31.1034768")) / ounce
+                data["دولار الصاغة"] = f"{gold_dollar:.2f}"
+
+            if not data:
+                log.warning(f"[PRIMARY] No data extracted (attempt {attempt + 1})")
+                time.sleep(2)
+                continue
+
+            sorted_data = dict(sorted(data.items()))
+            page_hash = hashlib.md5(str(sorted_data).encode()).hexdigest()
+            
+            log.info(f"[PRIMARY] Success - extracted {len(data)} items")
+            return data, page_hash
+
+        except Exception as e:
+            log.error(f"[PRIMARY] Attempt {attempt + 1}/{retries} failed: {e}")
+            time.sleep(2)
+
+    log.warning("[PRIMARY] All attempts failed - will try fallback")
+    return None, None
+
+# =====================
+# SNAPSHOT - FALLBACK (الموقع الأصلي)
+# =====================
+def get_snapshot_fallback(retries=3):
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
         "Accept-Language": "en-US,en;q=0.9",
@@ -126,7 +217,7 @@ def get_snapshot(retries=3):
         try:
             time.sleep(2 + random.randint(0, 3))
 
-            html = requests.get(URL, headers=headers, timeout=10).text
+            html = requests.get(FALLBACK_URL, headers=headers, timeout=10).text
             soup = BeautifulSoup(html, "html.parser")
             items = soup.find_all("div", class_="price-item")
 
@@ -163,22 +254,52 @@ def get_snapshot(retries=3):
                 data["دولار الصاغة"] = f"{gold_dollar:.2f}"
 
             if not data:
-                log.warning("No data extracted from page")
+                log.warning(f"[FALLBACK] No data extracted (attempt {attempt + 1})")
                 time.sleep(3)
                 continue
 
             sorted_data = dict(sorted(data.items()))
             page_hash = hashlib.md5(str(sorted_data).encode()).hexdigest()
 
-            fail_count = 0
+            log.info(f"[FALLBACK] Success - extracted {len(data)} items")
             return data, page_hash
 
         except Exception as e:
-            fail_count += 1
-            log.error(f"Attempt {attempt + 1}/{retries} failed: {e}")
+            log.error(f"[FALLBACK] Attempt {attempt + 1}/{retries} failed: {e}")
             time.sleep(3)
 
-    log.error("All snapshot attempts failed")
+    log.error("[FALLBACK] All attempts failed")
+    return {}, None
+
+# =====================
+# SNAPSHOT - MASTER (بيجرب الأساسي الأول، لو فشل يروح للاحتياطي)
+# =====================
+def get_snapshot(retries=3):
+    global fail_count, using_fallback
+
+    # أولاً: جرب الأساسي
+    primary_data, primary_hash = get_snapshot_primary(retries=2)
+    
+    if primary_data is not None:
+        if using_fallback:
+            log.info("✅ PRIMARY is back online! Switching from fallback.")
+            using_fallback = False
+        fail_count = 0
+        return primary_data, primary_hash
+
+    # الأساسي فشل → جرب الاحتياطي
+    log.warning("⚠️ PRIMARY failed. Switching to FALLBACK...")
+    using_fallback = True
+    
+    fallback_data, fallback_hash = get_snapshot_fallback(retries=retries)
+    
+    if fallback_data:
+        fail_count = 0
+        return fallback_data, fallback_hash
+
+    # الاتنين فشلوا
+    fail_count += 1
+    log.error("❌ Both PRIMARY and FALLBACK failed")
     return {}, None
 
 # =====================
@@ -227,7 +348,9 @@ def send(msg, retries=3):
 # FORMAT
 # =====================
 def format_msg(data):
-    msg = "💎 <b>تحديث لحظي للذهب</b>\n\n━━━━━━━━━━━━━━\n"
+    # نضيف علامة لو شغالين على الاحتياطي
+    fallback_notice = "⚠️ <b>[وضع احتياطي]</b>\n" if using_fallback else ""
+    msg = f"💎 <b>تحديث لحظي للذهب</b>\n{fallback_notice}\n━━━━━━━━━━━━━━\n"
 
     # أولاً: عيارات الدهب (اللي بنراقبها للتغيير)
     for k, v in data.items():
@@ -246,7 +369,8 @@ def format_msg(data):
 # FORMAT CLOSE (WITH STATS)
 # =====================
 def format_close_msg(data):
-    msg = "🌙 <b>إغلاق سوق الذهب اليوم</b>\n\n"
+    fallback_notice = "⚠️ <b>[وضع احتياطي]</b>\n" if using_fallback else ""
+    msg = f"🌙 <b>إغلاق سوق الذهب اليوم</b>\n{fallback_notice}\n"
 
     if data:
         msg += "📊 <b>آخر سعر قبل الإغلاق:</b>\n━━━━━━━━━━━━━━\n"
@@ -290,7 +414,7 @@ def loop():
         try:
             now = datetime.now(egypt_tz)
             hour = now.hour
-            log.info(f"Current hour: {hour}")
+            log.info(f"Current hour: {hour} | Fallback mode: {using_fallback}")
 
             if 10 <= hour < 24:
                 sent_close_msg = False
@@ -326,12 +450,10 @@ def loop():
                     time.sleep(10)
                     continue
 
-                # === التعديل الرئيسي هنا ===
-                # نحسب الـ hash بس على عيارات الدهب (اللي بنراقبها للتغيير)
+                # === نحسب الـ hash بس على عيارات الدهب ===
                 gold_only = {k: v for k, v in data.items() if isinstance(v, dict) and "عيار" in k}
                 gold_hash = hashlib.md5(str(dict(sorted(gold_only.items()))).encode()).hexdigest()
 
-                # نحسب نفس الشيء للـ last_data لو موجود
                 last_gold = {}
                 if last_data:
                     last_gold = {k: v for k, v in last_data.items() if isinstance(v, dict) and "عيار" in k}
@@ -380,6 +502,7 @@ def api():
 def health():
     return jsonify({
         "status": "ok",
+        "using_fallback": using_fallback,
         "last_data": bool(last_data),
         "fail_count": fail_count,
         "sent_open": sent_open_msg,
@@ -390,7 +513,8 @@ def health():
 
 @app.route("/")
 def home():
-    return "💎 Live Gold System Running Secure"
+    mode = "FALLBACK" if using_fallback else "PRIMARY"
+    return f"💎 Live Gold System Running Secure<br>Mode: <b>{mode}</b>"
 
 # =====================
 # START
