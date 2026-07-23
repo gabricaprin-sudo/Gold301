@@ -1,6 +1,8 @@
 import os
 import time
 import json
+import re
+import html
 import requests
 import random
 import logging
@@ -19,7 +21,7 @@ app = Flask(__name__)
 # =====================
 # CONFIG (SECURE)
 # =====================
-TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "8165343576:AAHjfPZpUUUDvWk3WbC1XocQ_MGQ1aESLT0")
+TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHANNEL = os.getenv("TELEGRAM_CHANNEL", "@AndriaGold")
 URL = os.getenv("GOLD_URL", "https://edahabapp.com/")
 API_KEY = os.getenv("API_KEY")
@@ -52,6 +54,13 @@ sent_close_msg = False
 sent_open_msg = False
 fail_count = 0
 yesterday_close = {}
+
+# =====================
+# CACHE
+# =====================
+cached_data = None
+cache_timestamp = None
+CACHE_TTL = 300  # 5 minutes
 
 # =====================
 # REQUESTS SESSION
@@ -153,9 +162,76 @@ def pct_change(current, previous):
     return ((current - previous) / previous) * 100
 
 # =====================
-# SNAPSHOT
+# PRIMARY SOURCE
 # =====================
-def get_snapshot(retries=3):
+def get_snapshot_primary():
+    """Extract gold prices from prices-dashboard wire:snapshot"""
+    try:
+        response = session.get(
+            "https://edahabapp.com/prices-dashboard",
+            timeout=(5, 10)
+        )
+        response.raise_for_status()
+
+        match = re.search(
+            r'wire:snapshot="([^"]+)"',
+            response.text
+        )
+
+        if not match:
+            log.warning("No wire:snapshot found in primary source")
+            return {}
+
+        snapshot = html.unescape(match.group(1))
+        obj = json.loads(snapshot)
+
+        prices = obj["data"]["goldPrices"][0]
+
+        data = {}
+
+        data["الذهب عيار 24"] = {
+            "sell": str(prices["24"][0]["ask"]),
+            "buy": str(prices["24"][0]["bid"])
+        }
+
+        data["الذهب عيار 21"] = {
+            "sell": str(prices["21"][0]["ask"]),
+            "buy": str(prices["21"][0]["bid"])
+        }
+
+        data["الذهب عيار 18"] = {
+            "sell": str(prices["18"][0]["ask"]),
+            "buy": str(prices["18"][0]["bid"])
+        }
+
+        data["الذهب عيار 14"] = {
+            "sell": str(prices["14"][0]["ask"]),
+            "buy": str(prices["14"][0]["bid"])
+        }
+
+        data["الجنيه الذهب"] = str(obj["data"]["goldPound"])
+        data["الأوقية العالمية"] = str(obj["data"]["goldOunce"])
+
+        gram24 = Decimal(data["الذهب عيار 24"]["sell"])
+        ounce = Decimal(data["الأوقية العالمية"])
+
+        gold_dollar = (
+            gram24 * Decimal("31.1034768")
+        ) / ounce
+
+        data["دولار الصاغة"] = f"{gold_dollar:.2f}"
+
+        return data
+
+    except Exception as e:
+        log.warning(f"Primary source failed: {e}")
+        return {}
+
+# =====================
+# BACKUP SOURCE
+# =====================
+def get_snapshot_backup(retries=3):
+    """Extract gold prices from main page (backup source)"""
     global fail_count
 
     for attempt in range(retries):
@@ -167,8 +243,8 @@ def get_snapshot(retries=3):
             else:
                 time.sleep(2 + random.randint(0, 3))
 
-            html = session.get(URL, timeout=(5, 10)).text
-            soup = BeautifulSoup(html, "html.parser")
+            html_text = session.get(URL, timeout=(5, 10)).text
+            soup = BeautifulSoup(html_text, "html.parser")
             items = soup.find_all("div", class_="price-item")
 
             data = {}
@@ -204,7 +280,7 @@ def get_snapshot(retries=3):
                 data["دولار الصاغة"] = f"{gold_dollar:.2f}"
 
             if not data:
-                log.warning("No data extracted from page")
+                log.warning("No data extracted from backup page")
                 continue
 
             fail_count = 0
@@ -212,9 +288,48 @@ def get_snapshot(retries=3):
 
         except Exception as e:
             fail_count += 1
-            log.error(f"Attempt {attempt + 1}/{retries} failed: {e}")
+            log.error(f"Backup attempt {attempt + 1}/{retries} failed: {e}")
 
-    log.error("All snapshot attempts failed")
+    log.error("All backup snapshot attempts failed")
+    return {}
+
+# =====================
+# UNIFIED SNAPSHOT (WITH CACHE)
+# =====================
+def get_snapshot():
+    """Try primary source first, then backup, then cache"""
+    global cached_data, cache_timestamp
+
+    # Try primary source
+    data = get_snapshot_primary()
+    if data:
+        log.info("PRIMARY SOURCE ✓")
+        cached_data = data
+        cache_timestamp = time.time()
+        return data
+
+    log.warning("PRIMARY FAILED → trying backup")
+
+    # Try backup source
+    data = get_snapshot_backup()
+    if data:
+        log.info("BACKUP SOURCE ✓")
+        cached_data = data
+        cache_timestamp = time.time()
+        return data
+
+    log.warning("BACKUP FAILED → trying cache")
+
+    # Use cached data if still valid
+    if cached_data and cache_timestamp:
+        age = time.time() - cache_timestamp
+        if age < CACHE_TTL:
+            log.info(f"USING CACHE (age: {age:.0f}s)")
+            return cached_data
+        else:
+            log.warning(f"Cache expired (age: {age:.0f}s)")
+
+    log.error("ALL SOURCES FAILED + NO VALID CACHE")
     return {}
 
 # =====================
@@ -262,7 +377,6 @@ def send(msg, retries=3):
 # =====================
 # MESSAGE FORMATTING
 # =====================
-# ترتيب ثابت للعيارات
 KARAT_ORDER = [
     "الذهب عيار 24",
     "الذهب عيار 21",
@@ -283,7 +397,7 @@ def format_prices(title, data):
             msg += f"🟢 بيع: {v['sell']} | 🔴 شراء: {v['buy']}\n"
             msg += "──────────────\n"
 
-    # أي عيارات تانية مش في الترتيب (لو ظهرت)
+    # أي عيارات تانية مش في الترتيب
     for k, v in data.items():
         if isinstance(v, dict) and "عيار" in k and k not in KARAT_ORDER:
             msg += f"🔸 <b>{k}:</b>\n"
@@ -402,7 +516,7 @@ def loop():
                         send(format_open_msg(data))
                         last_data = data
                         sent_open_msg = True
-                        save_state()  # Save sent_open_msg state
+                        save_state()
                         log.info("Opening message sent successfully")
                     else:
                         log.warning("No data available at market open, retrying in 30s")
@@ -449,7 +563,7 @@ def loop():
 
                     sent_close_msg = True
                     sent_open_msg = False
-                    save_state()  # Save sent_open_msg = False
+                    save_state()
 
                 time.sleep(60)
 
@@ -478,7 +592,8 @@ def health():
         "sent_close": sent_close_msg,
         "daily_high": {k: {"sell": str(v["sell"]), "time": v["time"]} for k, v in daily_high.items()},
         "daily_low": {k: {"sell": str(v["sell"]), "time": v["time"]} for k, v in daily_low.items()},
-        "yesterday_close": yesterday_close
+        "yesterday_close": yesterday_close,
+        "cache_age": round(time.time() - cache_timestamp, 1) if cache_timestamp else None
     })
 
 @app.route("/")
