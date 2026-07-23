@@ -21,7 +21,7 @@ app = Flask(__name__)
 # =====================
 # CONFIG (SECURE)
 # =====================
-TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "8165343576:AAHjfPZpUUUDvWk3WbC1XocQ_MGQ1aESLT0")
 CHANNEL = os.getenv("TELEGRAM_CHANNEL", "@AndriaGold")
 URL = os.getenv("GOLD_URL", "https://edahabapp.com/")
 API_KEY = os.getenv("API_KEY")
