@@ -1,7 +1,6 @@
 import os
 import time
 import json
-import hashlib
 import requests
 import random
 import logging
@@ -18,7 +17,7 @@ import pytz
 app = Flask(__name__)
 
 # =====================
-# CONFIG (SECURE - NO DEFAULTS)
+# CONFIG (SECURE)
 # =====================
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "8165343576:AAHjfPZpUUUDvWk3WbC1XocQ_MGQ1aESLT0")
 CHANNEL = os.getenv("TELEGRAM_CHANNEL", "@AndriaGold")
@@ -52,38 +51,43 @@ last_data = None
 sent_close_msg = False
 sent_open_msg = False
 fail_count = 0
-MAX_FAILS = 5
+yesterday_close = {}
 
 # =====================
-# DAILY STATS
+# REQUESTS SESSION
 # =====================
-daily_high = {}
-daily_low = {}
-daily_sums = {}
+session = requests.Session()
+session.headers.update({
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+    "Accept-Language": "en-US,en;q=0.9",
+})
 
 # =====================
-# PERSISTENCE FILE
+# PERSISTENCE
 # =====================
 STATE_FILE = "gold_state.json"
 
 def load_state():
-    """Load yesterday's close and other persistent state"""
-    global yesterday_close
+    """Load persistent state from file"""
+    global yesterday_close, sent_open_msg
     try:
         if os.path.exists(STATE_FILE):
             with open(STATE_FILE, "r", encoding="utf-8") as f:
                 state = json.load(f)
                 yesterday_close = state.get("yesterday_close", {})
+                sent_open_msg = state.get("sent_open_msg", False)
                 log.info("State loaded from file")
     except Exception as e:
         log.error(f"Failed to load state: {e}")
         yesterday_close = {}
+        sent_open_msg = False
 
 def save_state():
-    """Save yesterday's close and other persistent state"""
+    """Save persistent state to file"""
     try:
         state = {
             "yesterday_close": yesterday_close,
+            "sent_open_msg": sent_open_msg,
             "saved_at": datetime.now(egypt_tz).isoformat()
         }
         with open(STATE_FILE, "w", encoding="utf-8") as f:
@@ -100,8 +104,12 @@ def D(x):
     return Decimal(str(x).replace(",", "").strip())
 
 # =====================
-# STATS HELPERS
+# DAILY STATS
 # =====================
+daily_high = {}
+daily_low = {}
+daily_sums = {}
+
 def reset_daily_stats():
     global daily_high, daily_low, daily_sums
     daily_high = {}
@@ -150,14 +158,8 @@ def pct_change(current, previous):
 def get_snapshot(retries=3):
     global fail_count
 
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        "Accept-Language": "en-US,en;q=0.9",
-    }
-
     for attempt in range(retries):
         try:
-            # Exponential backoff for retries
             if attempt > 0:
                 sleep_time = 2 ** attempt + random.uniform(0, 2)
                 log.info(f"Retry attempt {attempt + 1}, waiting {sleep_time:.1f}s...")
@@ -165,7 +167,7 @@ def get_snapshot(retries=3):
             else:
                 time.sleep(2 + random.randint(0, 3))
 
-            html = requests.get(URL, headers=headers, timeout=10).text
+            html = session.get(URL, timeout=(5, 10)).text
             soup = BeautifulSoup(html, "html.parser")
             items = soup.find_all("div", class_="price-item")
 
@@ -236,19 +238,19 @@ def send(msg, retries=3):
 
     for attempt in range(retries):
         try:
-            resp = requests.post(url, data={
+            resp = session.post(url, data={
                 "chat_id": CHANNEL,
                 "text": msg,
                 "parse_mode": "HTML",
                 "reply_markup": json.dumps(keyboard)
-            }, timeout=10)
+            }, timeout=(5, 10))
 
             if resp.status_code == 200:
                 log.info("Message sent successfully")
                 return True
             else:
                 log.warning(f"Telegram API returned {resp.status_code}: {resp.text}")
-                time.sleep(2 ** attempt)  # Exponential backoff
+                time.sleep(2 ** attempt)
 
         except Exception as e:
             log.error(f"Send attempt {attempt + 1}/{retries} failed: {e}")
@@ -258,15 +260,32 @@ def send(msg, retries=3):
     return False
 
 # =====================
-# FORMAT UPDATE MESSAGE
+# MESSAGE FORMATTING
 # =====================
-def format_msg(data):
-    msg = "💎 <b>تحديث لحظي للذهب</b>\n\n"
+# ترتيب ثابت للعيارات
+KARAT_ORDER = [
+    "الذهب عيار 24",
+    "الذهب عيار 21",
+    "الذهب عيار 18",
+    "الذهب عيار 14",
+]
+
+def format_prices(title, data):
+    """Unified formatter for both open and update messages"""
+    msg = f"{title}\n\n"
     msg += "━━━━━━━━━━━━━━\n"
 
-    # عيارات الدهب (اللي بنراقبها للتغيير)
+    # عيارات الدهب بالترتيب المحدد
+    for karat in KARAT_ORDER:
+        if karat in data and isinstance(data[karat], dict):
+            v = data[karat]
+            msg += f"🔸 <b>{karat}:</b>\n"
+            msg += f"🟢 بيع: {v['sell']} | 🔴 شراء: {v['buy']}\n"
+            msg += "──────────────\n"
+
+    # أي عيارات تانية مش في الترتيب (لو ظهرت)
     for k, v in data.items():
-        if isinstance(v, dict) and "عيار" in k:
+        if isinstance(v, dict) and "عيار" in k and k not in KARAT_ORDER:
             msg += f"🔸 <b>{k}:</b>\n"
             msg += f"🟢 بيع: {v['sell']} | 🔴 شراء: {v['buy']}\n"
             msg += "──────────────\n"
@@ -281,31 +300,12 @@ def format_msg(data):
     msg += "━━━━━━━━━━━━━━"
     return msg
 
-# =====================
-# FORMAT OPEN MESSAGE
-# =====================
 def format_open_msg(data):
-    msg = "☀️ <b>افتتاح سوق الذهب</b>\n\n"
-    msg += "━━━━━━━━━━━━━━\n"
+    return format_prices("☀️ <b>افتتاح سوق الذهب</b>", data)
 
-    for k, v in data.items():
-        if isinstance(v, dict) and "عيار" in k:
-            msg += f"🔸 <b>{k}:</b>\n"
-            msg += f"🟢 بيع: {v['sell']} | 🔴 شراء: {v['buy']}\n"
-            msg += "──────────────\n"
+def format_msg(data):
+    return format_prices("💎 <b>تحديث لحظي للذهب</b>", data)
 
-    msg += "━━━━━━━━━━━━━━\n"
-
-    for k, v in data.items():
-        if not isinstance(v, dict) or "عيار" not in k:
-            msg += f"📌 {k}: <b>{v}</b>\n"
-
-    msg += "━━━━━━━━━━━━━━"
-    return msg
-
-# =====================
-# FORMAT CLOSE MESSAGE
-# =====================
 def format_close_msg(data):
     if not data:
         return "🌙 <b>إغلاق سوق الذهب اليوم</b>\n\nلا توجد بيانات متاحة لليوم.\n\n❤️ شكراً لمتابعتكم\n💎 نلقاكم 10 صباحاً"
@@ -314,21 +314,22 @@ def format_close_msg(data):
     msg += "📊 <b>آخر سعر قبل الإغلاق:</b>\n"
     msg += "━━━━━━━━━━━━━━\n"
 
-    for k, v in data.items():
-        if isinstance(v, dict):
-            msg += f"🔸 <b>{k}:</b>\n"
+    for karat in KARAT_ORDER:
+        if karat in data and isinstance(data[karat], dict):
+            v = data[karat]
+            msg += f"🔸 <b>{karat}:</b>\n"
             msg += f"🟢 بيع: {v['sell']} | 🔴 شراء: {v['buy']}\n"
 
-            if k in daily_high and k in daily_low:
-                msg += f"📈 أعلى: {daily_high[k]['sell']} ({daily_high[k]['time']})\n"
-                msg += f"📉 أقل: {daily_low[k]['sell']} ({daily_low[k]['time']})\n"
+            if karat in daily_high and karat in daily_low:
+                msg += f"📈 أعلى: {daily_high[karat]['sell']} ({daily_high[karat]['time']})\n"
+                msg += f"📉 أقل: {daily_low[karat]['sell']} ({daily_low[karat]['time']})\n"
 
-            avg_sell, avg_buy = get_avg(k)
+            avg_sell, avg_buy = get_avg(karat)
             if avg_sell is not None:
                 msg += f"📊 متوسط: {avg_sell:.2f}\n"
 
-            if k in yesterday_close:
-                y_sell = D(yesterday_close[k]["sell"])
+            if karat in yesterday_close:
+                y_sell = D(yesterday_close[karat]["sell"])
                 c_sell = D(v["sell"])
                 change = pct_change(c_sell, y_sell)
                 if change is not None:
@@ -336,7 +337,17 @@ def format_close_msg(data):
                     msg += f"{arrow} مقارنة بأمس: {change:+.2f}%\n"
 
             msg += "──────────────\n"
-        else:
+
+    # أي عيارات تانية
+    for k, v in data.items():
+        if isinstance(v, dict) and "عيار" in k and k not in KARAT_ORDER:
+            msg += f"🔸 <b>{k}:</b>\n"
+            msg += f"🟢 بيع: {v['sell']} | 🔴 شراء: {v['buy']}\n"
+            msg += "──────────────\n"
+
+    # باقي البيانات
+    for k, v in data.items():
+        if not isinstance(v, dict) or "عيار" not in k:
             msg += f"📌 {k}: <b>{v}</b>\n"
 
     msg += "━━━━━━━━━━━━━━\n"
@@ -347,7 +358,6 @@ def format_close_msg(data):
 # GOLD DATA COMPARISON
 # =====================
 def gold_changed(current, previous):
-    """Compare gold karat values directly instead of hashing"""
     if not previous:
         return True
 
@@ -370,7 +380,6 @@ def gold_changed(current, previous):
 def loop():
     global last_data, sent_close_msg, sent_open_msg, yesterday_close
 
-    # Load persistent state
     load_state()
 
     while True:
@@ -383,7 +392,6 @@ def loop():
             if 10 <= hour < 24:
                 sent_close_msg = False
 
-                # Market just opened
                 if not sent_open_msg:
                     log.info("Market opened → sending opening message")
                     data = get_snapshot()
@@ -394,29 +402,27 @@ def loop():
                         send(format_open_msg(data))
                         last_data = data
                         sent_open_msg = True
+                        save_state()  # Save sent_open_msg state
                         log.info("Opening message sent successfully")
                     else:
                         log.warning("No data available at market open, retrying in 30s")
                         time.sleep(30)
                         continue
 
-                # Regular updates during market hours
                 data = get_snapshot()
 
                 if not data:
-                    time.sleep(30)  # Wait longer if no data
+                    time.sleep(30)
                     continue
 
                 update_stats(data)
 
-                # First data after open (already handled above, but safety check)
                 if last_data is None:
                     send(format_msg(data))
                     last_data = data
                     time.sleep(10)
                     continue
 
-                # Send only if gold prices changed
                 if gold_changed(data, last_data):
                     log.info("Gold prices changed → sending update")
                     send(format_msg(data))
@@ -427,10 +433,8 @@ def loop():
                 time.sleep(10)
 
             else:
-                # After hours (midnight to 10 AM)
                 if not sent_close_msg:
                     if last_data:
-                        # Save yesterday's close for tomorrow's comparison
                         yesterday_close = {}
                         for k, v in last_data.items():
                             if isinstance(v, dict):
@@ -441,10 +445,12 @@ def loop():
                         log.info("Close message sent")
                     else:
                         log.warning("No last_data available for close message")
+                        send(format_close_msg(None))
 
                     sent_close_msg = True
+                    sent_open_msg = False
+                    save_state()  # Save sent_open_msg = False
 
-                sent_open_msg = False
                 time.sleep(60)
 
         except Exception as e:
@@ -452,15 +458,13 @@ def loop():
             time.sleep(5)
 
 # =====================
-# API ENDPOINTS (SECURE)
+# API ENDPOINTS
 # =====================
 @app.route("/api")
 def api():
     key = request.args.get("key")
-
     if not API_KEY or key != API_KEY:
         return jsonify({"error": "unauthorized"}), 403
-
     data = get_snapshot()
     return jsonify(data)
 
