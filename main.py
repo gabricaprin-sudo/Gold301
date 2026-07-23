@@ -60,7 +60,7 @@ yesterday_close = {}
 # =====================
 cached_data = None
 cache_timestamp = None
-CACHE_TTL = 300  # 5 minutes
+CACHE_TTL = 300
 
 # =====================
 # REQUESTS SESSION
@@ -77,7 +77,6 @@ session.headers.update({
 STATE_FILE = "gold_state.json"
 
 def load_state():
-    """Load persistent state from file"""
     global yesterday_close, sent_open_msg
     try:
         if os.path.exists(STATE_FILE):
@@ -92,7 +91,6 @@ def load_state():
         sent_open_msg = False
 
 def save_state():
-    """Save persistent state to file"""
     try:
         state = {
             "yesterday_close": yesterday_close,
@@ -103,6 +101,16 @@ def save_state():
             json.dump(state, f, ensure_ascii=False, indent=2)
     except Exception as e:
         log.error(f"Failed to save state: {e}")
+
+# =====================
+# PRICE FORMATTER
+# =====================
+def format_price(value):
+    """Format price to integer (no decimals)"""
+    try:
+        return str(int(float(value)))
+    except (ValueError, TypeError):
+        return str(value)
 
 # =====================
 # CLEAN DECIMAL
@@ -165,7 +173,6 @@ def pct_change(current, previous):
 # PRIMARY SOURCE
 # =====================
 def get_snapshot_primary():
-    """Extract gold prices from prices-dashboard wire:snapshot"""
     try:
         response = session.get(
             "https://edahabapp.com/prices-dashboard",
@@ -231,7 +238,6 @@ def get_snapshot_primary():
 # BACKUP SOURCE
 # =====================
 def get_snapshot_backup(retries=3):
-    """Extract gold prices from main page (backup source)"""
     global fail_count
 
     for attempt in range(retries):
@@ -294,13 +300,11 @@ def get_snapshot_backup(retries=3):
     return {}
 
 # =====================
-# UNIFIED SNAPSHOT (WITH CACHE)
+# UNIFIED SNAPSHOT
 # =====================
 def get_snapshot():
-    """Try primary source first, then backup, then cache"""
     global cached_data, cache_timestamp
 
-    # Try primary source
     data = get_snapshot_primary()
     if data:
         log.info("PRIMARY SOURCE ✓")
@@ -310,7 +314,6 @@ def get_snapshot():
 
     log.warning("PRIMARY FAILED → trying backup")
 
-    # Try backup source
     data = get_snapshot_backup()
     if data:
         log.info("BACKUP SOURCE ✓")
@@ -320,7 +323,6 @@ def get_snapshot():
 
     log.warning("BACKUP FAILED → trying cache")
 
-    # Use cached data if still valid
     if cached_data and cache_timestamp:
         age = time.time() - cache_timestamp
         if age < CACHE_TTL:
@@ -394,14 +396,14 @@ def format_prices(title, data):
         if karat in data and isinstance(data[karat], dict):
             v = data[karat]
             msg += f"🔸 <b>{karat}:</b>\n"
-            msg += f"🟢 بيع: {v['sell']} | 🔴 شراء: {v['buy']}\n"
+            msg += f"🟢 بيع: {format_price(v['sell'])} | 🔴 شراء: {format_price(v['buy'])}\n"
             msg += "──────────────\n"
 
     # أي عيارات تانية مش في الترتيب
     for k, v in data.items():
         if isinstance(v, dict) and "عيار" in k and k not in KARAT_ORDER:
             msg += f"🔸 <b>{k}:</b>\n"
-            msg += f"🟢 بيع: {v['sell']} | 🔴 شراء: {v['buy']}\n"
+            msg += f"🟢 بيع: {format_price(v['sell'])} | 🔴 شراء: {format_price(v['buy'])}\n"
             msg += "──────────────\n"
 
     msg += "━━━━━━━━━━━━━━\n"
@@ -432,15 +434,15 @@ def format_close_msg(data):
         if karat in data and isinstance(data[karat], dict):
             v = data[karat]
             msg += f"🔸 <b>{karat}:</b>\n"
-            msg += f"🟢 بيع: {v['sell']} | 🔴 شراء: {v['buy']}\n"
+            msg += f"🟢 بيع: {format_price(v['sell'])} | 🔴 شراء: {format_price(v['buy'])}\n"
 
             if karat in daily_high and karat in daily_low:
-                msg += f"📈 أعلى: {daily_high[karat]['sell']} ({daily_high[karat]['time']})\n"
-                msg += f"📉 أقل: {daily_low[karat]['sell']} ({daily_low[karat]['time']})\n"
+                msg += f"📈 أعلى: {format_price(daily_high[karat]['sell'])} ({daily_high[karat]['time']})\n"
+                msg += f"📉 أقل: {format_price(daily_low[karat]['sell'])} ({daily_low[karat]['time']})\n"
 
             avg_sell, avg_buy = get_avg(karat)
             if avg_sell is not None:
-                msg += f"📊 متوسط: {avg_sell:.2f}\n"
+                msg += f"📊 متوسط: {format_price(avg_sell)}\n"
 
             if karat in yesterday_close:
                 y_sell = D(yesterday_close[karat]["sell"])
@@ -456,7 +458,7 @@ def format_close_msg(data):
     for k, v in data.items():
         if isinstance(v, dict) and "عيار" in k and k not in KARAT_ORDER:
             msg += f"🔸 <b>{k}:</b>\n"
-            msg += f"🟢 بيع: {v['sell']} | 🔴 شراء: {v['buy']}\n"
+            msg += f"🟢 بيع: {format_price(v['sell'])} | 🔴 شراء: {format_price(v['buy'])}\n"
             msg += "──────────────\n"
 
     # باقي البيانات
@@ -502,7 +504,6 @@ def loop():
             hour = now.hour
             log.info(f"Current time: {now.strftime('%I:%M %p')} (hour: {hour})")
 
-            # Market hours: 10 AM to 12 AM (midnight)
             if 10 <= hour < 24:
                 sent_close_msg = False
 
