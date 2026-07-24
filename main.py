@@ -8,8 +8,7 @@ import random
 import logging
 from bs4 import BeautifulSoup
 from decimal import Decimal, getcontext
-from flask import Flask, jsonify, request, send_file
-from flask_cors import CORS  # ← جديد: CORS للـ Vercel
+from flask import Flask, jsonify, request, render_template_string
 from threading import Thread
 from datetime import datetime, timedelta
 import pytz
@@ -18,8 +17,6 @@ import pytz
 # FLASK APP
 # =====================
 app = Flask(__name__)
-CORS(app, origins=["*"])  # ← جديد: سمح لأي مصدر (Vercel)
-# لو عايز تقيدها لاحقاً: CORS(app, origins=["https://اسم-موقعك.vercel.app"])
 
 # =====================
 # CONFIG (SECURE)
@@ -391,27 +388,27 @@ KARAT_ORDER = [
 
 def format_prices(title, data):
     """Unified formatter for both open and update messages"""
-    msg = f"{title}\n\n"
-    msg += "━━━━━━━━━━━━━━\n"
+    msg = f"{title}\\n\\n"
+    msg += "━━━━━━━━━━━━━━\\n"
 
     for karat in KARAT_ORDER:
         if karat in data and isinstance(data[karat], dict):
             v = data[karat]
-            msg += f"🔸 <b>{karat}:</b>\n"
-            msg += f"🟢 بيع: {format_price(v['sell'])} | 🔴 شراء: {format_price(v['buy'])}\n"
-            msg += "──────────────\n"
+            msg += f"🔸 <b>{karat}:</b>\\n"
+            msg += f"🟢 بيع: {format_price(v['sell'])} | 🔴 شراء: {format_price(v['buy'])}\\n"
+            msg += "──────────────\\n"
 
     for k, v in data.items():
         if isinstance(v, dict) and "عيار" in k and k not in KARAT_ORDER:
-            msg += f"🔸 <b>{k}:</b>\n"
-            msg += f"🟢 بيع: {format_price(v['sell'])} | 🔴 شراء: {format_price(v['buy'])}\n"
-            msg += "──────────────\n"
+            msg += f"🔸 <b>{k}:</b>\\n"
+            msg += f"🟢 بيع: {format_price(v['sell'])} | 🔴 شراء: {format_price(v['buy'])}\\n"
+            msg += "──────────────\\n"
 
-    msg += "━━━━━━━━━━━━━━\n"
+    msg += "━━━━━━━━━━━━━━\\n"
 
     for k, v in data.items():
         if not isinstance(v, dict) or "عيار" not in k:
-            msg += f"📌 {k}: <b>{v}</b>\n"
+            msg += f"📌 {k}: <b>{v}</b>\\n"
 
     msg += "━━━━━━━━━━━━━━"
     return msg
@@ -424,25 +421,25 @@ def format_msg(data):
 
 def format_close_msg(data):
     if not data:
-        return "🌙 <b>إغلاق سوق الذهب اليوم</b>\n\nلا توجد بيانات متاحة لليوم.\n\n❤️ شكراً لمتابعتكم\n💎 نلقاكم 10 صباحاً"
+        return "🌙 <b>إغلاق سوق الذهب اليوم</b>\\n\\nلا توجد بيانات متاحة لليوم.\\n\\n❤️ شكراً لمتابعتكم\\n💎 نلقاكم 10 صباحاً"
 
-    msg = "🌙 <b>إغلاق سوق الذهب اليوم</b>\n\n"
-    msg += "📊 <b>آخر سعر قبل الإغلاق:</b>\n"
-    msg += "━━━━━━━━━━━━━━\n"
+    msg = "🌙 <b>إغلاق سوق الذهب اليوم</b>\\n\\n"
+    msg += "📊 <b>آخر سعر قبل الإغلاق:</b>\\n"
+    msg += "━━━━━━━━━━━━━━\\n"
 
     for karat in KARAT_ORDER:
         if karat in data and isinstance(data[karat], dict):
             v = data[karat]
-            msg += f"🔸 <b>{karat}:</b>\n"
-            msg += f"🟢 بيع: {format_price(v['sell'])} | 🔴 شراء: {format_price(v['buy'])}\n"
+            msg += f"🔸 <b>{karat}:</b>\\n"
+            msg += f"🟢 بيع: {format_price(v['sell'])} | 🔴 شراء: {format_price(v['buy'])}\\n"
 
             if karat in daily_high and karat in daily_low:
-                msg += f"📈 أعلى: {format_price(daily_high[karat]['sell'])} ({daily_high[karat]['time']})\n"
-                msg += f"📉 أقل: {format_price(daily_low[karat]['sell'])} ({daily_low[karat]['time']})\n"
+                msg += f"📈 أعلى: {format_price(daily_high[karat]['sell'])} ({daily_high[karat]['time']})\\n"
+                msg += f"📉 أقل: {format_price(daily_low[karat]['sell'])} ({daily_low[karat]['time']})\\n"
 
             avg_sell, avg_buy = get_avg(karat)
             if avg_sell is not None:
-                msg += f"📊 متوسط: {format_price(avg_sell)}\n"
+                msg += f"📊 متوسط: {format_price(avg_sell)}\\n"
 
             if karat in yesterday_close:
                 y_sell = D(yesterday_close[karat]["sell"])
@@ -450,22 +447,22 @@ def format_close_msg(data):
                 change = pct_change(c_sell, y_sell)
                 if change is not None:
                     arrow = "⬆️" if change > 0 else "⬇️" if change < 0 else "➖"
-                    msg += f"{arrow} مقارنة بأمس: {change:+.2f}%\n"
+                    msg += f"{arrow} مقارنة بأمس: {change:+.2f}%\\n"
 
-            msg += "──────────────\n"
+            msg += "──────────────\\n"
 
     for k, v in data.items():
         if isinstance(v, dict) and "عيار" in k and k not in KARAT_ORDER:
-            msg += f"🔸 <b>{k}:</b>\n"
-            msg += f"🟢 بيع: {format_price(v['sell'])} | 🔴 شراء: {format_price(v['buy'])}\n"
-            msg += "──────────────\n"
+            msg += f"🔸 <b>{k}:</b>\\n"
+            msg += f"🟢 بيع: {format_price(v['sell'])} | 🔴 شراء: {format_price(v['buy'])}\\n"
+            msg += "──────────────\\n"
 
     for k, v in data.items():
         if not isinstance(v, dict) or "عيار" not in k:
-            msg += f"📌 {k}: <b>{v}</b>\n"
+            msg += f"📌 {k}: <b>{v}</b>\\n"
 
-    msg += "━━━━━━━━━━━━━━\n"
-    msg += "\n❤️ شكراً لمتابعتكم\n💎 نلقاكم 10 صباحاً"
+    msg += "━━━━━━━━━━━━━━\\n"
+    msg += "\\n❤️ شكراً لمتابعتكم\\n💎 نلقاكم 10 صباحاً"
     return msg
 
 # =====================
@@ -571,18 +568,324 @@ def loop():
             time.sleep(5)
 
 # =====================
+# HTML TEMPLATE
+# =====================
+HTML_TEMPLATE = """
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>💎 أسعار الذهب اللحظية</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            min-height: 100vh;
+            color: #fff;
+            padding: 20px;
+        }
+        .container {
+            max-width: 500px;
+            margin: 0 auto;
+        }
+        .header {
+            text-align: center;
+            padding: 30px 0;
+        }
+        .header h1 {
+            font-size: 2rem;
+            margin-bottom: 10px;
+            background: linear-gradient(45deg, #ffd700, #ffed4a);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+        .header p {
+            color: #888;
+            font-size: 0.9rem;
+        }
+        .status {
+            text-align: center;
+            margin-bottom: 20px;
+            padding: 10px;
+            border-radius: 10px;
+            font-size: 0.85rem;
+        }
+        .status.live {
+            background: rgba(0, 255, 0, 0.1);
+            color: #4ade80;
+            border: 1px solid rgba(74, 222, 128, 0.3);
+        }
+        .status.cache {
+            background: rgba(255, 193, 7, 0.1);
+            color: #fbbf24;
+            border: 1px solid rgba(251, 191, 36, 0.3);
+        }
+        .status.offline {
+            background: rgba(255, 0, 0, 0.1);
+            color: #f87171;
+            border: 1px solid rgba(248, 113, 113, 0.3);
+        }
+        .card {
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 15px;
+            padding: 20px;
+            margin-bottom: 15px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+        }
+        .karat-title {
+            font-size: 1.2rem;
+            font-weight: bold;
+            margin-bottom: 15px;
+            color: #ffd700;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .prices-row {
+            display: flex;
+            justify-content: space-between;
+            gap: 10px;
+        }
+        .price-box {
+            flex: 1;
+            padding: 15px;
+            border-radius: 10px;
+            text-align: center;
+        }
+        .price-box.sell {
+            background: rgba(34, 197, 94, 0.15);
+            border: 1px solid rgba(34, 197, 94, 0.3);
+        }
+        .price-box.buy {
+            background: rgba(239, 68, 68, 0.15);
+            border: 1px solid rgba(239, 68, 68, 0.3);
+        }
+        .price-label {
+            font-size: 0.8rem;
+            margin-bottom: 5px;
+            opacity: 0.8;
+        }
+        .price-value {
+            font-size: 1.5rem;
+            font-weight: bold;
+        }
+        .price-box.sell .price-value { color: #4ade80; }
+        .price-box.buy .price-value { color: #f87171; }
+        .divider {
+            height: 1px;
+            background: rgba(255, 255, 255, 0.1);
+            margin: 15px 0;
+        }
+        .extra-data {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+        .extra-item {
+            display: flex;
+            justify-content: space-between;
+            padding: 10px;
+            background: rgba(255, 255, 255, 0.03);
+            border-radius: 8px;
+        }
+        .extra-label { color: #888; font-size: 0.9rem; }
+        .extra-value { font-weight: bold; color: #ffd700; }
+        .footer {
+            text-align: center;
+            padding: 20px;
+            color: #666;
+            font-size: 0.8rem;
+        }
+        .loading {
+            text-align: center;
+            padding: 50px;
+            font-size: 1.2rem;
+            color: #888;
+        }
+        .error {
+            text-align: center;
+            padding: 50px;
+            color: #f87171;
+        }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+        .live-dot {
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            background: #4ade80;
+            border-radius: 50%;
+            animation: pulse 2s infinite;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>💎 أسعار الذهب</h1>
+            <p>تحديث لحظي - مصر</p>
+        </div>
+        
+        <div id="status" class="status offline">
+            ⏳ جاري التحميل...
+        </div>
+        
+        <div id="content">
+            <div class="loading">جاري تحميل الأسعار...</div>
+        </div>
+        
+        <div class="footer">
+            <p>آخر تحديث: <span id="lastUpdate">--</span></p>
+            <p style="margin-top: 5px;">⚡ يتم التحديث تلقائياً كل 10 ثواني</p>
+        </div>
+    </div>
+
+    <script>
+        let lastData = null;
+        
+        function formatPrice(value) {
+            return Math.floor(parseFloat(value)).toLocaleString('ar-EG');
+        }
+        
+        function renderData(data, source, updatedAt) {
+            const content = document.getElementById('content');
+            const status = document.getElementById('status');
+            const lastUpdate = document.getElementById('lastUpdate');
+            
+            // Update status
+            if (source === 'live') {
+                status.className = 'status live';
+                status.innerHTML = '<span class="live-dot"></span> متصل مباشرة';
+            } else if (source === 'cache') {
+                status.className = 'status cache';
+                status.innerHTML = '⚡ من الكاش';
+            } else {
+                status.className = 'status offline';
+                status.innerHTML = '❌ غير متصل';
+            }
+            
+            // Update time
+            if (updatedAt) {
+                const date = new Date(updatedAt);
+                lastUpdate.textContent = date.toLocaleString('ar-EG');
+            }
+            
+            // Build HTML
+            let html = '';
+            
+            // Gold karats
+            const karats = ['الذهب عيار 24', 'الذهب عيار 21', 'الذهب عيار 18', 'الذهب عيار 14'];
+            
+            karats.forEach(karat => {
+                if (data[karat] && typeof data[karat] === 'object') {
+                    html += `
+                        <div class="card">
+                            <div class="karat-title">🔸 ${karat}</div>
+                            <div class="prices-row">
+                                <div class="price-box sell">
+                                    <div class="price-label">🟢 سعر البيع</div>
+                                    <div class="price-value">${formatPrice(data[karat].sell)}</div>
+                                </div>
+                                <div class="price-box buy">
+                                    <div class="price-label">🔴 سعر الشراء</div>
+                                    <div class="price-value">${formatPrice(data[karat].buy)}</div>
+                                </div>
+                            </div>
+                        </div>
+                    `;
+                }
+            });
+            
+            // Extra data
+            const extras = [];
+            for (const [key, value] of Object.entries(data)) {
+                if (typeof value !== 'object' && !karats.includes(key)) {
+                    extras.push({key, value});
+                }
+            }
+            
+            if (extras.length > 0) {
+                html += '<div class="card"><div class="extra-data">';
+                extras.forEach(item => {
+                    html += `
+                        <div class="extra-item">
+                            <span class="extra-label">📌 ${item.key}</span>
+                            <span class="extra-value">${item.value}</span>
+                        </div>
+                    `;
+                });
+                html += '</div></div>';
+            }
+            
+            content.innerHTML = html;
+        }
+        
+        async function fetchPrices() {
+            try {
+                const response = await fetch('/api/prices');
+                const result = await response.json();
+                
+                if (result.data && Object.keys(result.data).length > 0) {
+                    lastData = result.data;
+                    renderData(result.data, result.source, result.updated_at);
+                } else if (lastData) {
+                    renderData(lastData, 'offline', null);
+                } else {
+                    document.getElementById('content').innerHTML = 
+                        '<div class="error">❌ لا توجد بيانات متاحة حالياً</div>';
+                }
+            } catch (error) {
+                console.error('Fetch error:', error);
+                if (lastData) {
+                    renderData(lastData, 'offline', null);
+                } else {
+                    document.getElementById('content').innerHTML = 
+                        '<div class="error">❌ فشل الاتصال بالخادم</div>';
+                }
+            }
+        }
+        
+        // Initial load
+        fetchPrices();
+        
+        // Auto refresh every 10 seconds
+        setInterval(fetchPrices, 10000);
+    </script>
+</body>
+</html>
+"""
+
+# =====================
 # API ENDPOINTS
 # =====================
+@app.route("/")
+def home():
+    return render_template_string(HTML_TEMPLATE)
+
 @app.route("/api/prices")
 def api_prices():
-    """Public endpoint for HTML page - returns prices directly (no API key needed)"""
+    """Public endpoint for HTML page - reads from cache"""
     global cached_data
 
     if cached_data:
-        return jsonify(cached_data)
+        return jsonify({
+            "data": cached_data,
+            "source": "cache",
+            "updated_at": datetime.fromtimestamp(cache_timestamp, egypt_tz).isoformat() if cache_timestamp else None
+        })
 
-    # Fallback: fetch fresh if cache is empty
-    return jsonify(get_snapshot())
+    data = get_snapshot()
+    return jsonify({
+        "data": data,
+        "source": "live",
+        "updated_at": datetime.now(egypt_tz).isoformat()
+    })
 
 @app.route("/api")
 def api():
@@ -606,10 +909,6 @@ def health():
         "yesterday_close": yesterday_close,
         "cache_age": round(time.time() - cache_timestamp, 1) if cache_timestamp else None
     })
-
-@app.route("/")
-def home():
-    return "💎 Live Gold System Running Securely"
 
 # =====================
 # START
