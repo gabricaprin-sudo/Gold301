@@ -21,7 +21,7 @@ app = Flask(__name__)
 # =====================
 # CONFIG (SECURE)
 # =====================
-TOKEN = os.getenv("8165343576:AAHjfPZpUUUDvWk3WbC1XocQ_MGQ1aESLT0")
+TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "8165343576:AAHjfPZpUUUDvWk3WbC1XocQ_MGQ1aESLT0")
 CHANNEL = os.getenv("TELEGRAM_CHANNEL", "@AndriaGold")
 URL = os.getenv("GOLD_URL", "https://edahabapp.com/")
 API_KEY = os.getenv("API_KEY")
@@ -611,8 +611,18 @@ def loop():
             time.sleep(5)
 
 # Start the bot loop in background thread (works with Gunicorn)
-Thread(target=loop, daemon=True).start()
-log.info("Bot loop started in background thread")
+def start_bot_loop():
+    """Start bot loop with delay to ensure everything is ready"""
+    import time
+    time.sleep(3)  # Wait for Flask/Gunicorn to fully initialize
+    try:
+        loop()
+    except Exception as e:
+        log.error(f"Bot loop crashed: {e}")
+        raise
+
+Thread(target=start_bot_loop, daemon=True).start()
+log.info("Bot loop thread created, will start in 3 seconds")
 
 # =====================
 # HTML TEMPLATE
