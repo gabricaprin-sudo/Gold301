@@ -112,17 +112,6 @@ def format_price(value):
     except (ValueError, TypeError):
         return str(value)
 
-def calc_spread(data):
-    try:
-        if "الذهب عيار 24" in data and isinstance(data["الذهب عيار 24"], dict):
-            sell = float(data["الذهب عيار 24"].get("sell", 0))
-            buy = float(data["الذهب عيار 24"].get("buy", 0))
-            spread = sell - buy
-            return str(int(spread))
-    except (ValueError, TypeError, KeyError):
-        pass
-    return "--"
-
 # =====================
 # CLEAN DECIMAL
 # =====================
@@ -236,6 +225,18 @@ def get_snapshot_primary():
         data["الجنيه الذهب"] = str(obj["data"].get("goldPound", "--"))
         data["الأوقية العالمية"] = str(obj["data"].get("goldOunce", "--"))
 
+        # الفجوة السعرية من المصدر الأساسي مباشرة
+        spread_val = obj["data"].get("spread")
+        if spread_val is not None:
+            data["الفجوة السعرية"] = str(spread_val)
+        else:
+            # محاولة البحث عن المفتاح بالأسماء البديلة
+            for key in ["spread", "priceGap", "gap", "priceSpread", "الفجوة", "الفجوة_السعرية"]:
+                if key in obj["data"]:
+                    data["الفجوة السعرية"] = str(obj["data"][key])
+                    log.info(f"Found spread under key: {key}")
+                    break
+
         gram24 = Decimal(data["الذهب عيار 24"]["sell"])
         ounce = Decimal(data["الأوقية العالمية"])
 
@@ -316,30 +317,64 @@ def get_snapshot_backup(retries=3):
     return {}
 
 # =====================
+# MERGE SOURCES
+# =====================
+def merge_sources(primary, backup):
+    """
+    دمج بين المصدرين:
+    - الأسعار الأساسية (ذهب، جنيه، أوقية، دولار الصاغة، الفجوة السعرية) من المصدر الأساسي
+    - الدولار الأمريكي من المصدر الاحتياطي فقط
+    - لو الأساسي وقع بالكامل، استخدم الاحتياطي بالكامل
+    """
+    if not primary and not backup:
+        return {}
+
+    if not primary:
+        log.info("Primary source empty, using backup entirely")
+        return backup
+
+    merged = dict(primary)
+
+    if backup:
+        # الدولار الأمريكي من الاحتياطي فقط
+        if "الدولار الأمريكي" in backup:
+            merged["الدولار الأمريكي"] = backup["الدولار الأمريكي"]
+            log.info("USD rate merged from backup source")
+
+        # لو الفجوة السعرية مش موجودة في الأساسي، نحاول نجيبها من الاحتياطي
+        if "الفجوة السعرية" not in merged:
+            for key in ["الفجوة السعرية", "الفجوة", "spread", "priceGap", "gap"]:
+                if key in backup:
+                    merged["الفجوة السعرية"] = backup[key]
+                    log.info(f"Spread merged from backup under key: {key}")
+                    break
+
+    return merged
+
+# =====================
 # UNIFIED SNAPSHOT
 # =====================
 def get_snapshot():
     global cached_data, cache_timestamp, last_source
 
-    data = get_snapshot_primary()
+    primary = get_snapshot_primary()
+    backup = get_snapshot_backup() if not primary else get_snapshot_backup()
+
+    data = merge_sources(primary, backup)
+
     if data:
-        log.info("PRIMARY SOURCE")
-        last_source = "primary"
+        if primary:
+            log.info("PRIMARY SOURCE (merged with backup if needed)")
+            last_source = "primary+backup" if backup and "الدولار الأمريكي" in backup else "primary"
+        else:
+            log.info("BACKUP SOURCE (primary failed)")
+            last_source = "backup"
+
         cached_data = data
         cache_timestamp = time.time()
         return data
 
-    log.warning("PRIMARY FAILED - trying backup")
-
-    data = get_snapshot_backup()
-    if data:
-        log.info("BACKUP SOURCE")
-        last_source = "backup"
-        cached_data = data
-        cache_timestamp = time.time()
-        return data
-
-    log.warning("BACKUP FAILED - trying cache")
+    log.warning("ALL SOURCES FAILED - trying cache")
 
     if cached_data and cache_timestamp:
         age = time.time() - cache_timestamp
@@ -434,10 +469,7 @@ def format_prices(title, data):
     msg += "━━━━━━━━━━━━━━\n"
 
     for key in EXTRAS_ORDER:
-        if key == "الفجوة السعرية":
-            spread = calc_spread(data)
-            msg += f"📌 {key}: <b>{spread}</b>\n"
-        elif key in data:
+        if key in data:
             msg += f"📌 {key}: <b>{data[key]}</b>\n"
 
     for k, v in data.items():
@@ -494,10 +526,7 @@ def format_close_msg(data):
     msg += "━━━━━━━━━━━━━━\n"
 
     for key in EXTRAS_ORDER:
-        if key == "الفجوة السعرية":
-            spread = calc_spread(data)
-            msg += f"📌 {key}: <b>{spread}</b>\n"
-        elif key in data:
+        if key in data:
             msg += f"📌 {key}: <b>{data[key]}</b>\n"
 
     for k, v in data.items():
@@ -810,21 +839,12 @@ HTML_TEMPLATE = """
             return Math.floor(parseFloat(value)).toLocaleString('ar-EG');
         }
 
-        function calcSpread(data) {
-            if (data["الذهب عيار 24"] && typeof data["الذهب عيار 24"] === 'object') {
-                const sell = parseFloat(data["الذهب عيار 24"].sell);
-                const buy = parseFloat(data["الذهب عيار 24"].buy);
-                return Math.floor(sell - buy);
-            }
-            return '--';
-        }
-
         function renderData(data, source, updatedAt) {
             const content = document.getElementById('content');
             const status = document.getElementById('status');
             const lastUpdate = document.getElementById('lastUpdate');
 
-            if (source === 'live') {
+            if (source === 'live' || source === 'primary+backup') {
                 status.className = 'status live';
                 status.innerHTML = '<span class="live-dot"></span> متصل مباشرة';
             } else if (source === 'cache') {
@@ -869,25 +889,19 @@ HTML_TEMPLATE = """
                 { key: 'الأوقية العالمية', label: 'الأوقية العالمية' },
                 { key: 'دولار الصاغة', label: 'دولار الصاغة' },
                 { key: 'الدولار الأمريكي', label: 'الدولار الأمريكي' },
-                { key: 'spread', label: 'الفجوة السعرية', value: calcSpread(data) }
+                { key: 'الفجوة السعرية', label: 'الفجوة السعرية' }
             ];
 
             let extrasHtml = '';
             extrasOrder.forEach(item => {
-                let value;
-                if (item.key === 'spread') {
-                    value = item.value;
-                } else if (data[item.key]) {
-                    value = data[item.key];
-                } else {
-                    return;
+                if (data[item.key]) {
+                    extrasHtml += `
+                        <div class="extra-item">
+                            <span class="extra-label">📌 ${item.label}</span>
+                            <span class="extra-value">${data[item.key]}</span>
+                        </div>
+                    `;
                 }
-                extrasHtml += `
-                    <div class="extra-item">
-                        <span class="extra-label">📌 ${item.label}</span>
-                        <span class="extra-value">${value}</span>
-                    </div>
-                `;
             });
 
             if (extrasHtml) {
