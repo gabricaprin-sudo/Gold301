@@ -21,7 +21,7 @@ app = Flask(__name__)
 # =====================
 # CONFIG (SECURE)
 # =====================
-TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "8165343576:AAHjfPZpUUUDvWk3WbC1XocQ_MGQ1aESLT0")
+TOKEN = os.getenv("8165343576:AAHjfPZpUUUDvWk3WbC1XocQ_MGQ1aESLT0")
 CHANNEL = os.getenv("TELEGRAM_CHANNEL", "@AndriaGold")
 URL = os.getenv("GOLD_URL", "https://edahabapp.com/")
 API_KEY = os.getenv("API_KEY")
@@ -610,6 +610,10 @@ def loop():
             log.error(f"Loop error: {e}")
             time.sleep(5)
 
+# Start the bot loop in background thread (works with Gunicorn)
+Thread(target=loop, daemon=True).start()
+log.info("Bot loop started in background thread")
+
 # =====================
 # HTML TEMPLATE
 # =====================
@@ -964,8 +968,8 @@ def health():
     })
 
 # =====================
-# START
+# START (for local development only)
+# On Railway/Gunicorn, loop starts automatically after function definition
 # =====================
 if __name__ == "__main__":
-    Thread(target=loop, daemon=True).start()
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
