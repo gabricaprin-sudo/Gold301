@@ -46,12 +46,20 @@ h1 {
 
 .sell { color: #22c55e; }
 .buy { color: #ef4444; }
+
+.status {
+    text-align: center;
+    margin-top: 10px;
+    font-size: 12px;
+    color: #9ca3af;
+}
 </style>
 </head>
 
 <body>
 
 <h1>💰 أسعار الذهب لحظيًا</h1>
+<div class="status" id="status">جاري التحميل...</div>
 
 <div class="section-title">الذهب</div>
 <div class="container" id="gold"></div>
@@ -60,34 +68,47 @@ h1 {
 <div class="container" id="currency"></div>
 
 <script>
+// ⚠️ غيّر الرابط ده لرابط Railway بتاعك
+const API_URL = "https://اسم-تطبيقك.up.railway.app/api/prices";
+
 async function load() {
-    const res = await fetch("/api/prices");
-    const data = await res.json();
+    const status = document.getElementById("status");
+    try {
+        const res = await fetch(API_URL);
+        if (!res.ok) throw new Error("Network error");
+        const data = await res.json();
 
-    const gold = document.getElementById("gold");
-    const currency = document.getElementById("currency");
+        const gold = document.getElementById("gold");
+        const currency = document.getElementById("currency");
 
-    gold.innerHTML = "";
-    currency.innerHTML = "";
+        gold.innerHTML = "";
+        currency.innerHTML = "";
 
-    for (let [k, v] of Object.entries(data)) {
-        let card = document.createElement("div");
-        card.className = "card";
+        for (let [k, v] of Object.entries(data)) {
+            let card = document.createElement("div");
+            card.className = "card";
 
-        if (typeof v === "object") {
-            card.innerHTML = `
-                <div class="card-title">${k}</div>
-                <div class="sell">بيع: ${v.بيع}</div>
-                <div class="buy">شراء: ${v.شراء}</div>
-            `;
-            gold.appendChild(card);
-        } else {
-            card.innerHTML = `
-                <div class="card-title">${k}</div>
-                <div>${v}</div>
-            `;
-            currency.appendChild(card);
+            if (typeof v === "object") {
+                card.innerHTML = `
+                    <div class="card-title">${k}</div>
+                    <div class="sell">بيع: ${v.بيع || v.sell}</div>
+                    <div class="buy">شراء: ${v.شراء || v.buy}</div>
+                `;
+                gold.appendChild(card);
+            } else {
+                card.innerHTML = `
+                    <div class="card-title">${k}</div>
+                    <div>${v}</div>
+                `;
+                currency.appendChild(card);
+            }
         }
+
+        const now = new Date().toLocaleTimeString("ar-EG");
+        status.textContent = `✅ آخر تحديث: ${now}`;
+    } catch (e) {
+        status.textContent = "❌ فشل الاتصال بالسيرفر";
+        console.error(e);
     }
 }
 

@@ -8,7 +8,8 @@ import random
 import logging
 from bs4 import BeautifulSoup
 from decimal import Decimal, getcontext
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, send_file
+from flask_cors import CORS  # ← جديد: CORS للـ Vercel
 from threading import Thread
 from datetime import datetime, timedelta
 import pytz
@@ -17,6 +18,8 @@ import pytz
 # FLASK APP
 # =====================
 app = Flask(__name__)
+CORS(app, origins=["*"])  # ← جديد: سمح لأي مصدر (Vercel)
+# لو عايز تقيدها لاحقاً: CORS(app, origins=["https://اسم-موقعك.vercel.app"])
 
 # =====================
 # CONFIG (SECURE)
@@ -391,7 +394,6 @@ def format_prices(title, data):
     msg = f"{title}\n\n"
     msg += "━━━━━━━━━━━━━━\n"
 
-    # عيارات الدهب بالترتيب المحدد
     for karat in KARAT_ORDER:
         if karat in data and isinstance(data[karat], dict):
             v = data[karat]
@@ -399,7 +401,6 @@ def format_prices(title, data):
             msg += f"🟢 بيع: {format_price(v['sell'])} | 🔴 شراء: {format_price(v['buy'])}\n"
             msg += "──────────────\n"
 
-    # أي عيارات تانية مش في الترتيب
     for k, v in data.items():
         if isinstance(v, dict) and "عيار" in k and k not in KARAT_ORDER:
             msg += f"🔸 <b>{k}:</b>\n"
@@ -408,7 +409,6 @@ def format_prices(title, data):
 
     msg += "━━━━━━━━━━━━━━\n"
 
-    # باقي البيانات
     for k, v in data.items():
         if not isinstance(v, dict) or "عيار" not in k:
             msg += f"📌 {k}: <b>{v}</b>\n"
@@ -454,14 +454,12 @@ def format_close_msg(data):
 
             msg += "──────────────\n"
 
-    # أي عيارات تانية
     for k, v in data.items():
         if isinstance(v, dict) and "عيار" in k and k not in KARAT_ORDER:
             msg += f"🔸 <b>{k}:</b>\n"
             msg += f"🟢 بيع: {format_price(v['sell'])} | 🔴 شراء: {format_price(v['buy'])}\n"
             msg += "──────────────\n"
 
-    # باقي البيانات
     for k, v in data.items():
         if not isinstance(v, dict) or "عيار" not in k:
             msg += f"📌 {k}: <b>{v}</b>\n"
@@ -575,8 +573,20 @@ def loop():
 # =====================
 # API ENDPOINTS
 # =====================
+@app.route("/api/prices")
+def api_prices():
+    """Public endpoint for HTML page - returns prices directly (no API key needed)"""
+    global cached_data
+
+    if cached_data:
+        return jsonify(cached_data)
+
+    # Fallback: fetch fresh if cache is empty
+    return jsonify(get_snapshot())
+
 @app.route("/api")
 def api():
+    """Secure admin endpoint - requires API key"""
     key = request.args.get("key")
     if not API_KEY or key != API_KEY:
         return jsonify({"error": "unauthorized"}), 403
